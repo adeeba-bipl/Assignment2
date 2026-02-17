@@ -22,5 +22,9 @@ func main() {
 	r.GET("/loans/:account_id", handlers.GetLoanDetails)
 	r.GET("/accounts/:id/transactions", handlers.GetTransactionHistory)
 
+	r.GET("/users/loans", handlers.GetAllUsersWithLoans)
+
+	r.GET("/users/:user_id/loans", handlers.GetUserLoans)
+
 	r.Run(":8080")
 }

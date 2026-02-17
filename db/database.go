@@ -26,6 +26,8 @@ func InitDB() {
 		log.Fatal("DB_URL is not set in the .env file")
 	}
 
+	fmt.Println("DEBUG: Connecting to:", dsn)
+
 	//  Open the connection
 	DB, err = sqlx.Connect("postgres", dsn)
 	if err != nil {

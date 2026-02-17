@@ -1,6 +1,8 @@
 package models
 
-import "time"
+import (
+	"time"
+)
 
 type Bank struct {
 	ID   int64  `json:"id" db:"id"`
@@ -52,4 +54,11 @@ type Loan struct {
 	RemainingAmount int64     `json:"remaining_amount" db:"remaining_amount"`
 	Status          string    `json:"status" db:"status"`
 	CreatedAt       time.Time `json:"created_at" db:"created_at"`
+}
+
+type UserLoanReport struct {
+	UserID   int64  `json:"user_id" db:"user_id"` // Set this to user_id
+	FullName string `json:"full_name" db:"full_name"`
+	Email    string `json:"email" db:"email"`
+	Loans    []Loan `json:"loans" db:"-"`
 }

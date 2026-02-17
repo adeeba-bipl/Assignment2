@@ -10,7 +10,7 @@ import (
 
 // RegisterUser handles POST /register
 func RegisterUser(c *gin.Context) {
-	// Define the expected input structure
+	// input structure
 	var req struct {
 		FullName string `json:"full_name" binding:"required"`
 		Email    string `json:"email" binding:"required,email"`
