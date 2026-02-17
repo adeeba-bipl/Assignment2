@@ -60,6 +60,7 @@ func GetAllUsersWithLoans(c *gin.Context) {
 	var loanRows []LoanWithOwner
 	query := `
         SELECT l.*, ao.user_id 
+
         FROM loans l
         JOIN account_owners ao ON l.account_id = ao.account_id`
 
@@ -82,7 +83,8 @@ func GetAllUsersWithLoans(c *gin.Context) {
 			UserID:   u.ID,
 			FullName: u.FullName,
 			Email:    u.Email,
-			Loans:    loanMap[u.ID], 
+			Loans:    loanMap[u.ID],
+		})
 	}
 
 	c.JSON(http.StatusOK, response)
