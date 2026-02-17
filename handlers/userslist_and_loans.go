@@ -43,49 +43,68 @@ func GetUserLoans(c *gin.Context) {
 
 // GetAllUsersWithLoans fetches every user and their associated loans
 func GetAllUsersWithLoans(c *gin.Context) {
-	var users []models.User
 
-	// Get all users
-	err := db.DB.Select(&users, "SELECT id, full_name, email FROM users ORDER BY id ASC")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch users"})
-		return
+	type FlatRow struct {
+		UserID   int64  `db:"user_id"`
+		FullName string `db:"full_name"`
+		Email    string `db:"email"`
+
+		LoanID          *int64  `db:"loan_id"`
+		PrincipalAmount *int64  `db:"principal_amount"`
+		Status          *string `db:"status"`
+		RemainingAmount *int64  `db:"remaining_amount"`
 	}
 
-	// Get all loans with their accounts
-	type LoanWithOwner struct {
-		models.Loan
-		UserID int64 `db:"user_id"`
-	}
-	var loanRows []LoanWithOwner
+	var rows []FlatRow
+
+	// Single query using joins
 	query := `
-        SELECT l.*, ao.user_id 
+        SELECT u.id as user_id, u.full_name, u.email, 
+               l.id as loan_id, l.principal_amount, l.status, l.remaining_amount
+        FROM users u
+        LEFT JOIN account_owners ao ON u.id = ao.user_id
+        LEFT JOIN loans l ON ao.account_id = l.account_id
+        ORDER BY u.id ASC`
 
-        FROM loans l
-        JOIN account_owners ao ON l.account_id = ao.account_id`
-
-	err = db.DB.Select(&loanRows, query)
+	err := db.DB.Select(&rows, query)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch loans"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database query failed"})
 		return
 	}
 
-	// Map loans to users
-	loanMap := make(map[int64][]models.Loan)
-	for _, lr := range loanRows {
-		loanMap[lr.UserID] = append(loanMap[lr.UserID], lr.Loan)
+	// 3. Grouping the rows
+	reportMap := make(map[int64]*models.UserLoanReport)
+	var finalResponse []models.UserLoanReport
+
+	for _, row := range rows {
+
+		if _, exists := reportMap[row.UserID]; !exists {
+			userReport := &models.UserLoanReport{
+				UserID:   row.UserID,
+				FullName: row.FullName,
+				Email:    row.Email,
+				Loans:    []models.Loan{},
+			}
+			reportMap[row.UserID] = userReport
+		}
+
+		// If the row contains a loan
+		if row.LoanID != nil {
+			reportMap[row.UserID].Loans = append(reportMap[row.UserID].Loans, models.Loan{
+				ID:              *row.LoanID,
+				PrincipalAmount: *row.PrincipalAmount,
+				Status:          *row.Status,
+				RemainingAmount: *row.RemainingAmount,
+			})
+		}
 	}
 
-	// final response
-	var response []models.UserLoanReport
-	for _, u := range users {
-		response = append(response, models.UserLoanReport{
-			UserID:   u.ID,
-			FullName: u.FullName,
-			Email:    u.Email,
-			Loans:    loanMap[u.ID],
-		})
+	for _, row := range rows {
+		if report, exists := reportMap[row.UserID]; exists {
+			finalResponse = append(finalResponse, *report)
+			delete(reportMap, row.UserID)
+		}
 	}
 
-	c.JSON(http.StatusOK, response)
+	c.JSON(http.StatusOK, finalResponse)
 }
