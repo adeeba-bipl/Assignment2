@@ -15,7 +15,7 @@ func PerformTransaction(c *gin.Context) {
 		UserID    int64 `json:"user_id" binding:"required"`
 		Amount    int64 `json:"amount" binding:"required,gt=0"`
 
-		Type string `json:"type" binding:"required,oneof=DEPOSIT WITHDRAW LOAN_DISBURSEMENT LOAN_REPAYMENT"`
+		Type string `json:"type" binding:"required,oneof=DEPOSIT WITHDRAW "`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -42,7 +42,7 @@ func PerformTransaction(c *gin.Context) {
 
 	var query string
 	// DEPOSIT and LOAN_DISBURSEMENT add money; WITHDRAW and LOAN_REPAYMENT subtract money
-	if req.Type == "DEPOSIT" || req.Type == "LOAN_DISBURSEMENT" {
+	if req.Type == "DEPOSIT" {
 		query = `UPDATE accounts SET balance = balance + $1 WHERE id = $2 RETURNING balance`
 	} else {
 		query = `UPDATE accounts SET balance = balance - $1 WHERE id = $2 AND balance >= $1 RETURNING balance`

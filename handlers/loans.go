@@ -80,7 +80,7 @@ func TakeLoan(c *gin.Context) {
 	})
 }
 
-// RepayLoan handles paying back the loan
+// RepayLoan handles loan repayment
 func RepayLoan(c *gin.Context) {
 	var req struct {
 		LoanID    int64 `json:"loan_id" binding:"required"`
@@ -93,15 +93,6 @@ func RepayLoan(c *gin.Context) {
 		return
 	}
 
-	// SECURITY: Verify the Loan actually belongs to this specific Account
-	var exists bool
-	verifyQuery := `SELECT EXISTS(SELECT 1 FROM loans WHERE id = $1 AND account_id = $2)`
-	err := db.DB.Get(&exists, verifyQuery, req.LoanID, req.AccountID)
-	if err != nil || !exists {
-		c.JSON(http.StatusForbidden, gin.H{"error": "This loan does not belong to the specified account"})
-		return
-	}
-
 	tx, err := db.DB.Beginx()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal error"})
@@ -109,42 +100,42 @@ func RepayLoan(c *gin.Context) {
 	}
 	defer tx.Rollback()
 
-	// Deduct from account balance
+	// SAFETY CHECK: Get current remaining amount
+	var remaining int64
+	err = tx.Get(&remaining, "SELECT remaining_amount FROM loans WHERE id = $1 FOR UPDATE", req.LoanID) //FOR UPDATE to lock the row during repayment
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Loan not found"})
+		return
+	}
+
+	if req.Amount > remaining {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Repayment amount exceeds remaining loan balance"})
+		return
+	}
+
+	// DEDUCT from Account Balance
 	res, err := tx.Exec(`UPDATE accounts SET balance = balance - $1 WHERE id = $2 AND balance >= $1`, req.Amount, req.AccountID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Insufficient account balance"})
-		return
-	}
-	rows, _ := res.RowsAffected()
-	if rows == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Payment failed: Insufficient funds"})
+	if err != nil || func() bool { r, _ := res.RowsAffected(); return r == 0 }() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Insufficient funds to repay loan"})
 		return
 	}
 
-	// NEW: Record the repayment in the transactions table
-	txQuery := `INSERT INTO transactions (account_id, type, amount) VALUES ($1, 'LOAN_REPAYMENT', $2)`
-	_, err = tx.Exec(txQuery, req.AccountID, req.Amount)
+	// SHOW in Transaction History
+	_, err = tx.Exec(`INSERT INTO transactions (account_id, type, amount) VALUES ($1, 'LOAN_REPAYMENT', $2)`,
+		req.AccountID, req.Amount)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not log repayment transaction"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to log transaction"})
 		return
 	}
 
-	// Reduce loan remaining amount
+	// REDUCE the Loan Balance
 	_, err = tx.Exec(`UPDATE loans SET remaining_amount = remaining_amount - $1 WHERE id = $2`, req.Amount, req.LoanID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not update loan"})
-		return
-	}
 
-	// Update status to REPAID if fully paid
-	_, err = tx.Exec(`UPDATE loans SET status = 'REPAID' WHERE id = $1 AND remaining_amount <= 0`, req.LoanID)
+	// Mark as REPAID if balance hits zero
+	tx.Exec(`UPDATE loans SET status = 'REPAID' WHERE id = $1 AND remaining_amount <= 0`, req.LoanID)
 
-	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to finalize repayment"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "Loan repayment successful and recorded in history"})
+	tx.Commit()
+	c.JSON(http.StatusOK, gin.H{"message": "Repayment processed and logged in history"})
 }
 
 // GetLoanDetails returns active loans for an account

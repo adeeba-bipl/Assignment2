@@ -18,7 +18,9 @@ func main() {
 	r.GET("/accounts/:id", handlers.GetAccountDetails)
 
 	r.POST("/loans", handlers.TakeLoan)
-	r.POST("/loans/repay", handlers.RepayLoan)
+
+	r.POST("/loans/repay", handlers.RepayLoan) //loan repayment
+
 	r.GET("/loans/:account_id", handlers.GetLoanDetails)
 	r.GET("/accounts/:id/transactions", handlers.GetTransactionHistory)
 
