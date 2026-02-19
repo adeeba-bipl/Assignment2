@@ -25,6 +25,6 @@ func main() {
 	r.GET("/users/loans", handlers.GetAllUsersWithLoans)
 
 	r.GET("/users/:user_id/loans", handlers.GetUserLoans)
-
+	r.GET("/customers", handlers.GetCustomers)
 	r.Run(":8080")
 }
