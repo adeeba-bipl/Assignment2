@@ -80,7 +80,7 @@ func TakeLoan(c *gin.Context) {
 	})
 }
 
-// RepayLoan handles paying back the loan
+// Loan repayment
 func RepayLoan(c *gin.Context) {
 	var req struct {
 		LoanID    int64 `json:"loan_id" binding:"required"`
@@ -88,17 +88,10 @@ func RepayLoan(c *gin.Context) {
 		Amount    int64 `json:"amount" binding:"required,gt=0"`
 	}
 
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
+	var err error
 
-	// SECURITY: Verify the Loan actually belongs to this specific Account
-	var exists bool
-	verifyQuery := `SELECT EXISTS(SELECT 1 FROM loans WHERE id = $1 AND account_id = $2)`
-	err := db.DB.Get(&exists, verifyQuery, req.LoanID, req.AccountID)
-	if err != nil || !exists {
-		c.JSON(http.StatusForbidden, gin.H{"error": "This loan does not belong to the specified account"})
+	if err = c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -107,44 +100,65 @@ func RepayLoan(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal error"})
 		return
 	}
-	defer tx.Rollback()
 
-	// Deduct from account balance
-	res, err := tx.Exec(`UPDATE accounts SET balance = balance - $1 WHERE id = $2 AND balance >= $1`, req.Amount, req.AccountID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Insufficient account balance"})
-		return
+	//  Check Loan
+	var remaining int64
+	err = tx.Get(&remaining, `SELECT remaining_amount FROM loans WHERE id = $1 AND account_id = $2 AND status != 'REPAID' FOR UPDATE`, req.LoanID, req.AccountID)
+
+	if err == nil {
+		// Overpayment Check
+		if req.Amount <= remaining {
+
+			// Deduct from Account
+			res, err := tx.Exec(`UPDATE accounts SET balance = balance - $1 WHERE id = $2 AND balance >= $1`, req.Amount, req.AccountID)
+
+			if err == nil {
+				rows, _ := res.RowsAffected()
+				if rows > 0 {
+
+					// Update Loan Balance & Status
+					res, err = tx.Exec(`UPDATE loans SET remaining_amount = remaining_amount - $1, status = CASE WHEN remaining_amount - $1 <= 0 THEN 'REPAID' ELSE status END WHERE id = $2`, req.Amount, req.LoanID)
+
+					if err == nil {
+						//Insert Transaction Record
+						_, err = tx.Exec(`INSERT INTO transactions (account_id, loan_id, type, amount) VALUES ($1, $2, 'LOAN_REPAYMENT', $3)`, req.AccountID, req.LoanID, req.Amount)
+
+						if err == nil {
+							// Final Commit
+							if tx.Commit() == nil {
+								success = true
+							} else {
+								c.JSON(http.StatusInternalServerError, gin.H{"error": "Final save failed"})
+							}
+						} else {
+							c.JSON(http.StatusInternalServerError, gin.H{"error": "Transaction log failed"})
+						}
+					} else {
+						c.JSON(http.StatusInternalServerError, gin.H{"error": "Loan update failed"})
+					}
+				} else {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "Insufficient funds"})
+				}
+			} else {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Account update failed"})
+			}
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Amount exceeds remaining balance"})
+		}
+	} else {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Loan not found or already repaid"})
 	}
-	rows, _ := res.RowsAffected()
-	if rows == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Payment failed: Insufficient funds"})
-		return
+
+	// if success is false then rollback
+	if err == nil {
+		tx.Rollback()
+
+	} else {
+		c.JSON(http.StatusOK, gin.H{
+			"message":     "Loan repayment successful",
+			"paid_amount": req.Amount,
+		})
 	}
-
-	// NEW: Record the repayment in the transactions table
-	txQuery := `INSERT INTO transactions (account_id, type, amount) VALUES ($1, 'LOAN_REPAYMENT', $2)`
-	_, err = tx.Exec(txQuery, req.AccountID, req.Amount)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not log repayment transaction"})
-		return
-	}
-
-	// Reduce loan remaining amount
-	_, err = tx.Exec(`UPDATE loans SET remaining_amount = remaining_amount - $1 WHERE id = $2`, req.Amount, req.LoanID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not update loan"})
-		return
-	}
-
-	// Update status to REPAID if fully paid
-	_, err = tx.Exec(`UPDATE loans SET status = 'REPAID' WHERE id = $1 AND remaining_amount <= 0`, req.LoanID)
-
-	if err := tx.Commit(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to finalize repayment"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "Loan repayment successful and recorded in history"})
 }
 
 // GetLoanDetails returns active loans for an account
